@@ -7,8 +7,8 @@ This combination is well-suited for heterogeneous tabular-text data and is compu
 The most important practical result is that the final LGBM pipeline achieves very strong validation performance while remaining fast enough for repeated experimentation:
 
 - Validation Accuracy: $0.9682$
-- Validation Macro-$F_1$: $0.9635$
-- Validation Weighted-$F_1$: $0.9685$
+- Validation Macro- $F_1$: $0.9635$
+- Validation Weighted- $F_1$: $0.9685$
 - Best blended validation score after class-scale tuning: $0.9730$
 
 This section explains why the pipeline works, how each design choice maps to the code in `src/lgbm.py`, and why this approach ultimately outperforms our earlier BPNN direction from the project plan.
@@ -118,7 +118,7 @@ $$
 where each component $\phi_j(x)$ is either a count, a binary indicator, or an interaction. For example,
 
 $$
-    \phi_{\text{hydro}}(x) = \mathbf{1}\Big\{\text{``hydrocephalus"} \in x\Big\}
+    \phi_{\text{hydro}}(x) = \mathbf{1} \Big(\text{``hydrocephalus"} \in x\Big)
 $$
 
 and
