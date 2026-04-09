@@ -196,7 +196,7 @@ so the loss penalizes errors on rare classes more heavily.
 
 ### 5. Bayesian Optimization
 
-Instead of hand-tuning hyperparameters, `lgbm.py` uses Bayesian optimization through `manual_bayes_optimize`. The basic idea is to model the unknown validation objective
+Instead of hand-tuning hyperparameters, `lgbm.py` uses Bayesian optimization through `bayes_optimize()`. The basic idea is to model the unknown validation objective
 
 $$
     f(\theta) = \text{score}(\theta)
@@ -215,7 +215,7 @@ This is an upper-confidence-bound style rule: it balances exploitation of promis
 The demo optimizer implementation from `src/utils.py` is:
 
 ```python
-def manual_bayes_optimize(objective, bounds, n_trials: int, n_init: int, seed: int, candidate_pool: int = 384):
+def bayes_optimize(objective, bounds, n_trials: int, n_init: int, seed: int, candidate_pool: int = 384):
     keys = list(bounds.keys())
     low = np.array([float(bounds[k][0]) for k in keys], dtype=np.float64)
     high = np.array([float(bounds[k][1]) for k in keys], dtype=np.float64)
