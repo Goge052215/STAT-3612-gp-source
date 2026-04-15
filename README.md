@@ -6,7 +6,10 @@ This repository contains our `STAT3612: Statistical Machine Learning` group proj
 
 The task is a five-class classification problem from the Kaggle competition, using structured clinical information and radiology reports. The current production approach in this repo is the LightGBM pipeline in `src/lgbm.py`.
 
-## What This Project Does
+- Kaggle competition link [here](https://www.kaggle.com/competitions/2026-spring-sdst-stat-3612-group-project/overview)
+- Dataset download link [here](https://www.kaggle.com/competitions/2026-spring-sdst-stat-3612-group-project/data)
+
+## Project Overview
 
 The pipeline combines:
 
@@ -33,21 +36,13 @@ The main workflow in `src/lgbm.py` is:
 
 ## Repo Layout
 
-- `src/lgbm.py`: main end-to-end training and prediction pipeline.
-- `src/utils.py`: shared helpers, including the manual Bayesian optimization routine.
-- `docs/summary.md`: project brief and dataset description from the course.
-- `docs/writeups.md`: detailed method writeup and explanation of why the final LightGBM system works.
+- `src/`: source code directory.
+  - `src/lgbm.py`: main end-to-end training and prediction pipeline.
+  - `src/utils.py`: shared helpers, including the manual Bayesian optimization routine.
+- `docs/`: documentation directory.
+  - `docs/summary.md`: project brief and dataset description from the course.
+  - `docs/writeups.md`: detailed method writeup and explanation of why the final LightGBM system works.
 - `requirements.txt`: Python dependencies for the project.
-
-## How I Use This Repo
-
-My practical workflow is:
-
-1. Read `docs/summary.md` to stay aligned with the project requirements and allowed data usage.
-2. Use `docs/writeups.md` to document modeling decisions and keep the final report consistent with the code.
-3. Iterate on `src/lgbm.py` for feature engineering, imbalance handling, and model tuning.
-4. Run experiments locally, compare validation metrics, and keep the strongest pipeline as the Kaggle submission path.
-5. Push cleaned project code and documentation to GitHub for version control and reproducibility.
 
 ## Running
 
