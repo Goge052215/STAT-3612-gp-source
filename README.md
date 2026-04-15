@@ -89,5 +89,3 @@ Run the main pipeline:
 ```bash
 python src/lgbm.py
 ```
-
-Note: this script expects the course dataset files to exist under a local `data/` directory, which is not included in this repository.
