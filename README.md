@@ -74,7 +74,7 @@ Despite the severe class imbalance (e.g., only 3 Pineal/Choroid cases in validat
   - `docs/summary.md`: project brief and dataset description from the course.
   - `docs/writeups.md`: detailed method writeup and explanation of why the final LightGBM system works.
 - `requirements.txt`: Python dependencies for the project.
-- - `data.zip`: dataset zip file, needs to be extracted to `data/` directory.
+- `data.zip`: dataset zip file, needs to be extracted to `data/` directory.
 
 ## Running
 
