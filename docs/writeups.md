@@ -396,10 +396,10 @@ The final validation snapshot from the LightGBM pipeline is:
 | Metric | Value |
 |---|---:|
 | Accuracy | 0.9682 |
-| Macro $F_1$ | 0.9635 |
-| Weighted $F_1$ | 0.9685 |
-| Blended score during HPO | 0.9672 |
-| Blended score after class-scale tuning | 0.9730 |
+| Macro-$F_1$ | 0.9744 |
+| Weighted-$F_1$ | 0.9684 |
+| Blended score during HPO | 0.9650 |
+| Blended score after class-scale tuning | 0.9768 |
 
 Class-wise validation summary:
 
@@ -407,9 +407,9 @@ Class-wise validation summary:
 |---|---:|---:|---:|---:|
 | Brain Metastase Tumour | 0.88 | 0.97 | 0.92 | 36 |
 | Glioma | 0.99 | 0.94 | 0.96 | 132 |
-| Meningioma | 0.98 | 1.00 | 0.99 | 104 |
+| Meningioma | 0.97 | 1.00 | 0.99 | 104 |
 | Pineal tumour and Choroid plexus tumour | 1.00 | 1.00 | 1.00 | 3 |
-| Tumors of the sellar region | 0.89 | 1.00 | 0.94 | 8 |
+| Tumors of the sellar region | 1.00 | 1.00 | 1.00 | 8 |
 
 The public Kaggle score of $0.98996$ is consistent with this validation profile. The model is strong not only because it predicts common classes well, but because it preserves minority recall through targeted upsampling, class weighting, and posterior scaling.
 
