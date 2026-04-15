@@ -1,4 +1,6 @@
-# STAT 3612 Group Project
+# Brain Tumor Classifier
+
+*STAT 3612 Group Project*
 
 This repository contains our `STAT3612: Statistical Machine Learning` group project on presurgical brain tumor classification using the course-provided multimodal dataset.
 
