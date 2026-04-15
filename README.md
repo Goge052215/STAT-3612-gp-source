@@ -1,4 +1,4 @@
-# Brain Tumor Classifier
+# Light Brain Tumor Classifier
 
 *STAT 3612 Group Project*
 
@@ -33,6 +33,37 @@ The main workflow in `src/lgbm.py` is:
 7. Tune LightGBM hyperparameters with the custom Bayesian optimization helper in `src/utils.py`.
 8. Tune class-specific probability scales on the validation split.
 9. Retrain on `train + val` and generate final test predictions for Kaggle submission.
+
+For a more **technical** explanation of the workflow, please refer to the [writeups.md](https://github.com/Goge052215/Brain-Tumor-Classifier-Light/blob/main/docs/writeups.md).
+
+## Results
+
+The LightGBM pipeline achieves strong predictive performance, particularly prioritizing the recall of rare tumor classes through targeted upsampling and probability scaling. 
+
+**Overall Validation Metrics:**
+- **Accuracy**: $0.9682$
+- **Macro-$F_1$**: $0.9635$
+- **Weighted-$F_1$**: $0.9685$
+- **Blended Score**: $0.9730$
+
+**Class-wise Validation Summary:**
+
+| Class | Precision | Recall | $F_1$ | Support |
+|---|---:|---:|---:|---:|
+| Brain Metastase Tumour | 0.88 | 0.97 | 0.92 | 36 |
+| Glioma | 0.99 | 0.94 | 0.96 | 132 |
+| Meningioma | 0.97 | 1.00 | 0.99 | 104 |
+| Pineal tumour and Choroid plexus tumour | 1.00 | 1.00 | 1.00 | 3 |
+| Tumors of the sellar region | 1.00 | 1.00 | 1.00 | 8 |
+
+Despite the severe class imbalance (e.g., only 3 Pineal/Choroid cases in validation), the model successfully identifies all rare cases without significantly degrading precision on common tumors like Glioma.
+
+### Running Time
+
+| Device | Time (seconds) |
+|---|---:|
+| Kaggle Cloud | 144.20 |
+| M1 Pro CPU | 29.84 |
 
 ## Repo Layout
 
