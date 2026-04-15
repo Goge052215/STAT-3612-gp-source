@@ -9,9 +9,9 @@ This combination is well-suited for heterogeneous tabular-text data and is compu
 The most important practical result is that the final LGBM pipeline achieves very strong validation performance while remaining fast enough for repeated experimentation:
 
 - Validation Accuracy: $0.9682$
-- Validation Macro $F_1$: $0.9635$
-- Validation Weighted $F_1$: $0.9685$
-- Best blended validation score after class-scale tuning: $0.9730$
+- Validation Macro $F_1$: $0.9744$
+- Validation Weighted $F_1$: $0.9684$
+- Best blended validation score after class-scale tuning: $0.9768$
 
 This section explains why the pipeline works, how each design choice maps to the code in `src/lgbm.py`, and why this approach ultimately outperforms our earlier BPNN direction from the project plan.
 
@@ -109,6 +109,7 @@ Beyond raw TF-IDF, the script engineers several report-level features from domai
 - `has_pineal`
 - `has_sellar`
 - `has_ventricular`
+- `has_extra_axial_meningioma_keywords`
 - interaction terms such as `enhancement_x_edema`
 
 Mathematically, these are deterministic transformations
@@ -120,7 +121,7 @@ $$
 where each component $\phi_j(x)$ is either a count, a binary indicator, or an interaction. For example,
 
 $$
-    \phi_{\text{hydro}}(x) = \mathbf{1}\Big\(\text{``hydrocephalus"} \in x\Big\)
+    \phi_{\text{hydro}}(x) = \mathbf{1}\Big\{\text{``hydrocephalus"} \in x\Big\}
 $$
 
 and
@@ -165,15 +166,15 @@ The final tuned hyperparameters from the strongest validation run are:
 
 ```python
 {
-    'n_estimators': 564, 
-    'learning_rate': 0.038779807415831626, 
-    'num_leaves': 80, 
-    'max_depth': 10, 
-    'min_child_samples': 28, 
-    'subsample': 0.6607862420987788, 
-    'colsample_bytree': 0.8028510862313268, 
-    'reg_alpha': 2.739790199916749e-05, 
-    'reg_lambda': 0.0005459362257021032, 
+    'n_estimators': 376, 
+    'learning_rate': 0.09058074809146924, 
+    'num_leaves': 118, 
+    'max_depth': 17, 
+    'min_child_samples': 64, 
+    'subsample': 0.8960453870151097, 
+    'colsample_bytree': 0.8409729009868997, 
+    'reg_alpha': 0.00017485035139246937, 
+    'reg_lambda': 0.2807887164806946, 
     'objective': 'multiclass', 
     'class_weight': 'balanced', 
     'random_state': 42, 
@@ -183,10 +184,10 @@ The final tuned hyperparameters from the strongest validation run are:
 
 These values reflect an important bias-variance tradeoff:
 
-- a relatively small learning rate with many trees improves fit smoothness;
-- moderate subsampling and column subsampling reduce variance;
-- regularization terms discourage overly complex trees;
-- `num_leaves` and `max_depth` are large enough to capture non-linear interactions between text and clinical indicators without exploding variance.
+- a relatively high learning rate with fewer trees provides a fast, robust convergence;
+- `num_leaves` and `max_depth` are large, allowing the model to capture complex non-linear interactions between text and clinical indicators;
+- to prevent overfitting from such deep trees, `min_child_samples` is set strictly high (64) to restrict overly specific leaf nodes;
+- strong $L_2$ regularization (`reg_lambda`) alongside high subsampling constraints acts as an additional bulwark against variance.
 
 The model also uses `class_weight="balanced"`, which reweights each class approximately inversely to its frequency. If $\pi_k$ is the empirical class proportion, then the class weight behaves roughly like
 
@@ -198,7 +199,7 @@ so the loss penalizes errors on rare classes more heavily.
 
 ### 5. Bayesian Optimization
 
-Instead of hand-tuning hyperparameters, `lgbm.py` uses Bayesian optimization through `manual_bayes_optimize`. The basic idea is to model the unknown validation objective
+Instead of hand-tuning hyperparameters, `lgbm.py` uses Bayesian optimization through `bayes_optimize`. The basic idea is to model the unknown validation objective
 
 $$
     f(\theta) = \text{score}(\theta)
@@ -217,26 +218,33 @@ This is an upper-confidence-bound style rule: it balances exploitation of promis
 The demo optimizer implementation from `src/utils.py` is:
 
 ```python
-def manual_bayes_optimize(objective, bounds, n_trials: int, n_init: int, seed: int, candidate_pool: int = 384):
+def bayes_optimize(objective, bounds, n_trials: int, n_init: int, seed: int, candidate_pool: int = 384):
     keys = list(bounds.keys())
     low = np.array([float(bounds[k][0]) for k in keys], dtype=np.float64)
     high = np.array([float(bounds[k][1]) for k in keys], dtype=np.float64)
     rng = np.random.default_rng(seed)
-    x_hist = []
-    y_hist = []
+    x_hist, y_hist = [], []
+
+    def _eval_point(x):
+        score = float(objective(**dict(zip(keys, x))))
+        x_hist.append(np.asarray(x, dtype=np.float64))
+        y_hist.append(score)
 
     for _ in range(n_init):
-        x0 = rng.uniform(low, high)
-        x_hist.append(x0)
-        y_hist.append(float(objective(**dict(zip(keys, x0)))))
+        _eval_point(rng.uniform(low, high))
 
     for step in range(n_trials - n_init):
-        gp.fit(np.vstack(x_hist), np.asarray(y_hist, dtype=np.float64))
+        # scale y for GP stability
+        y_arr = np.asarray(y_hist, dtype=np.float64)
+        y_scaled = (y_arr - np.mean(y_arr)) / max(np.std(y_arr), 1e-8)
+        
+        gp.fit(np.vstack(x_hist), y_scaled)
+        
         x_cand = rng.uniform(low, high, size=(candidate_pool, len(keys)))
         mu, sigma = gp.predict(x_cand, return_std=True)
+        
         x_next = x_cand[np.argmax(mu + 2.0 * sigma)]
-        x_hist.append(x_next)
-        y_hist.append(float(objective(**dict(zip(keys, x_next)))))
+        _eval_point(x_next)
 ```
 
 The key point is that the optimized score is not raw accuracy. The script defines
