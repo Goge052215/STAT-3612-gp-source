@@ -67,6 +67,7 @@ Despite the severe class imbalance (e.g., only 3 Pineal/Choroid cases in validat
 
 ## Repo Layout
 
+- `data/`: dataset directory.
 - `src/`: source code directory.
   - `src/lgbm.py`: main end-to-end training and prediction pipeline.
   - `src/utils.py`: shared helpers, including the manual Bayesian optimization routine.
