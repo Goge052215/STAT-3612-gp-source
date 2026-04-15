@@ -36,7 +36,7 @@ def build_submission(case_id_series, predicted_labels, target_col: str = "Overal
     )
 
 
-def manual_bayes_optimize(objective, bounds, n_trials: int, n_init: int, seed: int, candidate_pool: int = 384):
+def bayes_optimize(objective, bounds, n_trials: int, n_init: int, seed: int, candidate_pool: int = 384):
     keys = list(bounds.keys())
     low = np.array([float(bounds[k][0]) for k in keys], dtype=np.float64)
     high = np.array([float(bounds[k][1]) for k in keys], dtype=np.float64)
