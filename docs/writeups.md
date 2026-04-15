@@ -9,8 +9,8 @@ This combination is well-suited for heterogeneous tabular-text data and is compu
 The most important practical result is that the final LGBM pipeline achieves very strong validation performance while remaining fast enough for repeated experimentation:
 
 - Validation Accuracy: $0.9682$
-- Validation Macro-$F_1$: $0.9635$
-- Validation Weighted-$F_1$: $0.9685$
+- Validation Macro $F_1$: $0.9635$
+- Validation Weighted $F_1$: $0.9685$
 - Best blended validation score after class-scale tuning: $0.9730$
 
 This section explains why the pipeline works, how each design choice maps to the code in `src/lgbm.py`, and why this approach ultimately outperforms our earlier BPNN direction from the project plan.
@@ -44,7 +44,7 @@ $$
     r = \frac{\max_k n_k}{\min_k n_k}
 $$
 
-is large, especially for the Pineal/Choroid and sellar-region classes. Since Kaggle evaluates macro-$F_1$, every class contributes equally to the score,
+is large, especially for the Pineal/Choroid and sellar-region classes. Since Kaggle evaluates macro $F_1$, every class contributes equally to the score,
 
 $$
     F_1^{\text{ macro}} = \frac{1}{K}\sum_{k=1}^{K} F_{1,k}
@@ -52,7 +52,7 @@ $$
 
 so a model that performs extremely well on common classes but misses rare classes is still suboptimal.
 
-This is why the pipeline does not optimize plain accuracy alone. Instead, it uses a custom blended objective that incorporates weighted-$F_1$, macro-$F_1$, and minority recall directly.
+This is why the pipeline does not optimize plain accuracy alone. Instead, it uses a custom blended objective that incorporates weighted $F_1$, macro $F_1$, and minority recall directly.
 
 ### 2. TF-IDF Vectorization
 
@@ -120,7 +120,7 @@ $$
 where each component $\phi_j(x)$ is either a count, a binary indicator, or an interaction. For example,
 
 $$
-    \phi_{\text{hydro}}(x) = \mathbf{1}\Big\{\text{``hydrocephalus"} \in x\Big\}
+    \phi_{\text{hydro}}(x) = \mathbf{1}\Big\(\text{``hydrocephalus"} \in x\Big\)
 $$
 
 and
@@ -351,7 +351,7 @@ Second, LightGBM is more computationally efficient when repeated tuning is requi
 
 Third, the final LightGBM pipeline makes better use of the hybrid feature space. Once the text representation was strengthened with word + char TF-IDF and domain indicators, the non-linear splits in boosted trees captured these interactions more effectively than a bagged forest. In practical terms, this is why LGBM became the production model and why the Kaggle score rose to $0.98996$.
 
-So the answer is not that RF is bad. Rather, RF was a valuable benchmark, but LightGBM provided the best combination of speed, flexibility, and macro-$F_1$ performance.
+So the answer is not that RF is bad. Rather, RF was a valuable benchmark, but LightGBM provided the best combination of speed, flexibility, and macro $F_1$ performance.
 
 #### Why does BPNN fail here, even though our previous paper used it?
 
@@ -388,8 +388,8 @@ The final validation snapshot from the LightGBM pipeline is:
 | Metric | Value |
 |---|---:|
 | Accuracy | 0.9682 |
-| Macro-$F_1$ | 0.9635 |
-| Weighted-$F_1$ | 0.9685 |
+| Macro $F_1$ | 0.9635 |
+| Weighted $F_1$ | 0.9685 |
 | Blended score during HPO | 0.9672 |
 | Blended score after class-scale tuning | 0.9730 |
 
