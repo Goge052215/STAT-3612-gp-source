@@ -42,8 +42,8 @@ The LightGBM pipeline achieves strong predictive performance, particularly prior
 
 **Overall Validation Metrics:**
 - **Accuracy**: $0.9682$
-- **Macro-$F_1$**: $0.9635$
-- **Weighted-$F_1$**: $0.9685$
+- **Macro $F_1$**: $0.9635$
+- **Weighted $F_1$**: $0.9685$
 - **Blended Score**: $0.9730$
 
 **Class-wise Validation Summary:**
