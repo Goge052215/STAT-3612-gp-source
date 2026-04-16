@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 CLINICAL_DIR = DATA_DIR / "clinical_information"
 FOCUS_CLASSES = [
+    "Brain Metastase Tumour",
     "Pineal tumour and Choroid plexus tumour",
     "Tumors of the sellar region",
 ]
@@ -94,7 +95,7 @@ test_df = combine_split(test_csv, test_df_json)
 
 # feature augmentation
 def add_report_features(df):
-    df["report"] = df["report"].fillna("").str.lower()
+    df["report"] = df["report"].fillna("").astype(str).str.lower()
     report_tokens = df["report"].str.findall(r"\b\w+\b")
     df["report_len"] = df["report"].apply(len)
     df["report_word_count"] = report_tokens.apply(len)
@@ -257,9 +258,9 @@ def to_lgbm_input(X):
 # score blending: 0.45 weighted F1, 0.35 macro F1, 0.20 focus recall F1
 def blend_score(y_true, y_pred, focus_ids):
     weighted = float(f1_score(y_true, y_pred, average="weighted"))
-    macro = float(f1_score(y_true, y_pred, average="macro"))
+    micro = float(f1_score(y_true, y_pred, average="micro"))
     if len(focus_ids) == 0:
-        focus_recall = macro
+        focus_recall = micro
     else:
         recalls = recall_score(
             y_true, y_pred, 
@@ -268,10 +269,10 @@ def blend_score(y_true, y_pred, focus_ids):
             zero_division=0
         )
         focus_recall = float(np.mean(recalls))
-    return 0.45 * weighted + 0.35 * macro + 0.20 * focus_recall
+    return 0.45 * micro + 0.35 * weighted + 0.20 * focus_recall
 
 # upsample the focus classes - mainly the minority classes
-def upsample_focus_classes(X, y, focus_ids, seed=42):
+def upsample_focus_classes(X, y, focus_ids, seed=42, class_multipliers=None):
     if len(focus_ids) == 0:
         return X, y
 
@@ -287,7 +288,11 @@ def upsample_focus_classes(X, y, focus_ids, seed=42):
         cls_idx = np.where(y == cls_id)[0]
         if len(cls_idx) == 0:
             continue
-        target_count = max(len(cls_idx) * 2, median_count)
+        multiplier = 2.0
+        if class_multipliers is not None:
+            multiplier = float(class_multipliers.get(int(cls_id), 2.0))
+        scaled_target = int(np.ceil(len(cls_idx) * multiplier))
+        target_count = min(max(scaled_target, len(cls_idx)), median_count)
         extra = target_count - len(cls_idx)
         if extra <= 0:
             continue
@@ -424,8 +429,23 @@ def tune_lgbm_bayes(X_tr, y_tr, X_va, y_va, focus_ids, n_trials=40, n_init=10, s
     return best_params, best_score
 
 # call the upsampling for imbalanced dataset
+focus_class_multipliers = {}
+if "Brain Metastase Tumour" in label_encoder.classes_:
+    cls_id = int(label_encoder.transform(["Brain Metastase Tumour"])[0])
+    focus_class_multipliers[cls_id] = 3.0
+if "Pineal tumour and Choroid plexus tumour" in label_encoder.classes_:
+    cls_id = int(label_encoder.transform(["Pineal tumour and Choroid plexus tumour"])[0])
+    focus_class_multipliers[cls_id] = 2.0
+if "Tumors of the sellar region" in label_encoder.classes_:
+    cls_id = int(label_encoder.transform(["Tumors of the sellar region"])[0])
+    focus_class_multipliers[cls_id] = 2.0
+
 X_train_balanced, y_train_balanced = upsample_focus_classes(
-    X_train_encoded, y_train_enc, focus_ids, seed=42
+    X_train_encoded,
+    y_train_enc,
+    focus_ids,
+    seed=42,
+    class_multipliers=focus_class_multipliers,
 )
 
 # now LGBM fit
@@ -503,7 +523,13 @@ X_test_final = hstack(
     format="csr"
 )
 y_full_enc = label_encoder.transform(y_full)
-X_full_balanced, y_full_balanced = upsample_focus_classes(X_full_encoded, y_full_enc, focus_ids, seed=42)
+X_full_balanced, y_full_balanced = upsample_focus_classes(
+    X_full_encoded,
+    y_full_enc,
+    focus_ids,
+    seed=42,
+    class_multipliers=focus_class_multipliers,
+)
 
 lgbm_final = LGBMClassifier(**best_params)
 lgbm_final.fit(to_lgbm_input(X_full_balanced), y_full_balanced)
