@@ -272,7 +272,7 @@ def blend_score(y_true, y_pred, focus_ids):
     return 0.45 * micro + 0.35 * weighted + 0.20 * focus_recall
 
 # upsample the focus classes - mainly the minority classes
-def upsample_focus_classes(X, y, focus_ids, seed=42, class_multipliers=None):
+def upsample_focus_classes(X, y, focus_ids, seed=42):
     if len(focus_ids) == 0:
         return X, y
 
@@ -288,11 +288,7 @@ def upsample_focus_classes(X, y, focus_ids, seed=42, class_multipliers=None):
         cls_idx = np.where(y == cls_id)[0]
         if len(cls_idx) == 0:
             continue
-        multiplier = 2.0
-        if class_multipliers is not None:
-            multiplier = float(class_multipliers.get(int(cls_id), 2.0))
-        scaled_target = int(np.ceil(len(cls_idx) * multiplier))
-        target_count = min(max(scaled_target, len(cls_idx)), median_count)
+        target_count = max(len(cls_idx) * 3, median_count)
         extra = target_count - len(cls_idx)
         if extra <= 0:
             continue
@@ -429,23 +425,8 @@ def tune_lgbm_bayes(X_tr, y_tr, X_va, y_va, focus_ids, n_trials=40, n_init=10, s
     return best_params, best_score
 
 # call the upsampling for imbalanced dataset
-focus_class_multipliers = {}
-if "Brain Metastase Tumour" in label_encoder.classes_:
-    cls_id = int(label_encoder.transform(["Brain Metastase Tumour"])[0])
-    focus_class_multipliers[cls_id] = 3.0
-if "Pineal tumour and Choroid plexus tumour" in label_encoder.classes_:
-    cls_id = int(label_encoder.transform(["Pineal tumour and Choroid plexus tumour"])[0])
-    focus_class_multipliers[cls_id] = 2.0
-if "Tumors of the sellar region" in label_encoder.classes_:
-    cls_id = int(label_encoder.transform(["Tumors of the sellar region"])[0])
-    focus_class_multipliers[cls_id] = 2.0
-
 X_train_balanced, y_train_balanced = upsample_focus_classes(
-    X_train_encoded,
-    y_train_enc,
-    focus_ids,
-    seed=42,
-    class_multipliers=focus_class_multipliers,
+    X_train_encoded, y_train_enc, focus_ids, seed=42
 )
 
 # now LGBM fit
@@ -523,13 +504,7 @@ X_test_final = hstack(
     format="csr"
 )
 y_full_enc = label_encoder.transform(y_full)
-X_full_balanced, y_full_balanced = upsample_focus_classes(
-    X_full_encoded,
-    y_full_enc,
-    focus_ids,
-    seed=42,
-    class_multipliers=focus_class_multipliers,
-)
+X_full_balanced, y_full_balanced = upsample_focus_classes(X_full_encoded, y_full_enc, focus_ids, seed=42)
 
 lgbm_final = LGBMClassifier(**best_params)
 lgbm_final.fit(to_lgbm_input(X_full_balanced), y_full_balanced)
