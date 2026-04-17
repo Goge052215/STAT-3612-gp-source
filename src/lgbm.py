@@ -13,6 +13,7 @@ from sklearn.metrics import (
     classification_report, 
     f1_score, recall_score
 )
+from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 
 from utils import bayes_optimize
@@ -464,53 +465,95 @@ print("Class Scales:", {
     label_encoder.inverse_transform([i])[0]: float(class_scales[i]) for i in focus_ids
 })
 
-# train again on test + val
-X_full = pd.concat([X_train, X_val], axis=0)
-y_full = pd.concat([y_train, y_val], axis=0)
-X_full_tab = X_full.drop(columns=["report", "case_id"], errors="ignore")
-X_test_tab_final = X_test.drop(columns=["report", "case_id"], errors="ignore")
-full_tab_all = pd.concat([X_full_tab, X_test_tab_final], axis=0)
-full_tab_all = pd.get_dummies(full_tab_all, drop_first=False)
-X_full_tab_encoded = full_tab_all.iloc[: len(X_full_tab), :]
-X_test_tab_final_encoded = full_tab_all.iloc[len(X_full_tab) :, :]
-
-tfidf_final_word = TfidfVectorizer(
-    ngram_range=(1, 2),
-    min_df=2,
-    max_features=2500,
-)
-tfidf_final_char = TfidfVectorizer(
-    analyzer="char_wb",
-    ngram_range=(3, 5),
-    min_df=2,
-    max_features=1200,
-)
-
-X_full_text_word = tfidf_final_word.fit_transform(X_full["report"])
-X_test_text_word_final = tfidf_final_word.transform(X_test["report"])
-X_full_text_char = tfidf_final_char.fit_transform(X_full["report"])
-X_test_text_char_final = tfidf_final_char.transform(X_test["report"])
-X_full_text = hstack([X_full_text_word, X_full_text_char], format="csr")
-X_test_text_final = hstack(
-    [X_test_text_word_final, X_test_text_char_final], 
-    format="csr"
-)
-X_full_encoded = hstack(
-    [csr_matrix(X_full_tab_encoded.to_numpy(dtype="float32")), X_full_text],
-    format="csr"
-)
-X_test_final = hstack(
-    [csr_matrix(X_test_tab_final_encoded.to_numpy(dtype="float32")), X_test_text_final], 
-    format="csr"
-)
+# train again on train + val with leakage-free 5-fold OOF calibration
+X_full = pd.concat([X_train, X_val], axis=0).reset_index(drop=True)
+y_full = pd.concat([y_train, y_val], axis=0).reset_index(drop=True)
 y_full_enc = label_encoder.transform(y_full)
-X_full_balanced, y_full_balanced = upsample_focus_classes(X_full_encoded, y_full_enc, focus_ids, seed=42)
 
-lgbm_final = LGBMClassifier(**best_params)
-lgbm_final.fit(to_lgbm_input(X_full_balanced), y_full_balanced)
 
-test_proba = lgbm_final.predict_proba(to_lgbm_input(X_test_final))
-test_pred = np.argmax(apply_class_scales(test_proba, class_scales), axis=1)
+def build_fold_matrices(train_df, infer_df):
+    train_tab = train_df.drop(columns=["report", "case_id"], errors="ignore").copy()
+    infer_tab = infer_df.drop(columns=["report", "case_id"], errors="ignore").copy()
+
+    train_tab = pd.get_dummies(train_tab, drop_first=False)
+    infer_tab = pd.get_dummies(infer_tab, drop_first=False)
+    infer_tab = infer_tab.reindex(columns=train_tab.columns, fill_value=0)
+
+    tfidf_word_local = TfidfVectorizer(
+        ngram_range=(1, 2),
+        min_df=2,
+        max_features=2500,
+    )
+    tfidf_char_local = TfidfVectorizer(
+        analyzer="char_wb",
+        ngram_range=(3, 5),
+        min_df=2,
+        max_features=1200,
+    )
+
+    X_train_text_word_local = tfidf_word_local.fit_transform(train_df["report"])
+    X_infer_text_word_local = tfidf_word_local.transform(infer_df["report"])
+    X_train_text_char_local = tfidf_char_local.fit_transform(train_df["report"])
+    X_infer_text_char_local = tfidf_char_local.transform(infer_df["report"])
+    X_train_text_local = hstack(
+        [X_train_text_word_local, X_train_text_char_local], 
+        format="csr"
+    )
+    X_infer_text_local = hstack(
+        [X_infer_text_word_local, X_infer_text_char_local], 
+        format="csr"
+    )
+
+    X_train_final = hstack(
+        [csr_matrix(train_tab.to_numpy(dtype="float32")), X_train_text_local],
+        format="csr"
+    )
+    X_infer_final = hstack(
+        [csr_matrix(infer_tab.to_numpy(dtype="float32")), X_infer_text_local],
+        format="csr"
+    )
+    return X_train_final, X_infer_final
+
+
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+n_classes = len(label_encoder.classes_)
+oof_proba = np.zeros((len(y_full_enc), n_classes), dtype=np.float32)
+test_proba_folds = []
+
+for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y_full_enc)), y_full_enc), start=1):
+    X_tr_df = X_full.iloc[tr_idx].reset_index(drop=True)
+    X_va_df = X_full.iloc[va_idx].reset_index(drop=True)
+    y_tr_fold = y_full_enc[tr_idx]
+    y_va_fold = y_full_enc[va_idx]
+
+    X_tr_fold_enc, X_va_fold_enc = build_fold_matrices(X_tr_df, X_va_df)
+    _, X_test_fold_enc = build_fold_matrices(X_tr_df, X_test.reset_index(drop=True))
+
+    X_tr_fold_bal, y_tr_fold_bal = upsample_focus_classes(
+        X_tr_fold_enc, y_tr_fold, focus_ids, seed=42 + fold
+    )
+
+    lgbm_fold = LGBMClassifier(**best_params)
+    lgbm_fold.fit(to_lgbm_input(X_tr_fold_bal), y_tr_fold_bal)
+
+    va_proba_fold = lgbm_fold.predict_proba(to_lgbm_input(X_va_fold_enc))
+    oof_proba[va_idx] = va_proba_fold
+    va_pred_fold = np.argmax(va_proba_fold, axis=1)
+    print(f"Fold {fold} blended score (raw):", blend_score(y_va_fold, va_pred_fold, focus_ids))
+
+    test_proba_fold = lgbm_fold.predict_proba(to_lgbm_input(X_test_fold_enc))
+    test_proba_folds.append(test_proba_fold)
+
+class_scales_oof, best_oof_blended_score = tune_class_scales(
+    y_full_enc, oof_proba, focus_ids, rounds=4
+)
+print("Best OOF Blended Score After Threshold Tuning:", best_oof_blended_score)
+print("OOF Class Scales:", {
+    label_encoder.inverse_transform([i])[0]: float(class_scales_oof[i]) for i in focus_ids
+})
+
+test_proba = np.mean(np.stack(test_proba_folds, axis=0), axis=0)
+test_pred = np.argmax(apply_class_scales(test_proba, class_scales_oof), axis=1)
 test_pred_label = label_encoder.inverse_transform(test_pred)
 
 # final submission frame.
@@ -521,4 +564,10 @@ submission = pd.DataFrame(
     }
 )
 
+output_dir = ROOT / "submissions"
+output_dir.mkdir(parents=True, exist_ok=True)
+submission_path = output_dir / "submission_lgbm.csv"
+submission.to_csv(submission_path, index=False)
+
 print("\nGenerated predictions:", len(submission))
+print(f"Saved: {submission_path}")
