@@ -387,46 +387,6 @@ A useful way to summarize the difference is:
 
 So BPNN does not "fail" in the sense of being unusable. It simply fails to become the best final model. It remains a reasonable complementary model for ensembling, but not the optimal standalone solution for this dataset.
 
-### Results
-
-#### Classification Report
-
-The final validation snapshot from the LightGBM pipeline is:
-
-| Metric | Value |
-|---|---:|
-| Accuracy | 0.9682 |
-| Macro-$F_1$ | 0.9744 |
-| Weighted-$F_1$ | 0.9684 |
-| Blended score during HPO | 0.9650 |
-| Blended score after class-scale tuning | 0.9768 |
-
-Class-wise validation summary:
-
-| Class | Precision | Recall | $F_1$ | Support |
-|---|---:|---:|---:|---:|
-| Brain Metastase Tumour | 0.88 | 0.97 | 0.92 | 36 |
-| Glioma | 0.99 | 0.94 | 0.96 | 132 |
-| Meningioma | 0.97 | 1.00 | 0.99 | 104 |
-| Pineal tumour and Choroid plexus tumour | 1.00 | 1.00 | 1.00 | 3 |
-| Tumors of the sellar region | 1.00 | 1.00 | 1.00 | 8 |
-
-The public Kaggle score of $0.98996$ is consistent with this validation profile. The model is strong not only because it predicts common classes well, but because it preserves minority recall through targeted upsampling, class weighting, and posterior scaling.
-
-#### Running Time
-
-Our final LightGBM pipeline is both lightweight and high-performing. In practical terms, it reaches near-state-of-the-art classification quality (public Kaggle score: $0.98996$) while keeping training time low enough for rapid iteration and reproducibility on commodity hardware.
-
-| Device | Time (seconds) |
-|---|---:|
-| Kaggle Cloud | 144.20 |
-| M1 Pro CPU | 29.84 |
-
-These timings show pure model training with the fixed best hyperparameters (i.e., the final selected configuration). Even on Kaggle Cloud, full training completes in about 2.4 minutes, and on an M1 Pro CPU it finishes in under 30 seconds. This runtime profile makes the approach suitable for frequent retraining, ablation studies, and deployment workflows where turnaround time matters.
-
-We intentionally exclude HPO time from the table because tuning is a one-off offline search step and is highly device-dependent. By reporting pure training time, we emphasize the runtime cost users can expect in normal operation: a compact model that remains computationally efficient without sacrificing predictive performance.
-
-
 ### References
 
 - Breiman, L. (2001). Random forests. *Machine Learning, 45*(1), 5-32. https://doi.org/10.1023/A:1010933404324
