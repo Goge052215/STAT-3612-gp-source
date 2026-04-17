@@ -13,6 +13,7 @@ from sklearn.metrics import (
     classification_report, 
     f1_score, recall_score
 )
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 
@@ -41,9 +42,11 @@ FOCUS_CLASSES = [
 ]
 BERT_MODEL_NAME = "emilyalsentzer/Bio_ClinicalBERT"
 LATE_FUSION_TFIDF_WEIGHT = 0.60
-HPO_N_TRIALS = 14
-HPO_N_INIT = 4
-HPO_OOF_SPLITS = 3
+# Challenger setting: original HPO budget + nested-style OOF tuning.
+HPO_N_TRIALS = 40
+HPO_N_INIT = 10
+HPO_INNER_OOF_SPLITS = 3
+FINAL_OUTER_OOF_SPLITS = 5
 
 # load json reports and split them
 def load_json_split(name: str):
@@ -417,7 +420,16 @@ X_test_bert_encoded = hstack(
 )
 
 # Bayesian optimization for LGBM parameters
-def tune_lgbm_bayes_oof(X_tune, y_tune, focus_ids, n_trials=14, n_init=4, n_splits=3, seed=42):
+def tune_lgbm_bayes_oof(
+    X_tfidf_tune,
+    X_bert_tune,
+    y_tune,
+    focus_ids,
+    n_trials=40,
+    n_init=10,
+    n_splits=3,
+    seed=42,
+):
     # initial bounds definition
     bounds = {
         "n_estimators": (120, 700),
@@ -464,17 +476,28 @@ def tune_lgbm_bayes_oof(X_tune, y_tune, focus_ids, n_trials=14, n_init=4, n_spli
         for fold, (tr_idx, va_idx) in enumerate(
             skf.split(np.zeros(len(y_tune)), y_tune), start=1
         ):
-            x_tr = X_tune[tr_idx]
+            x_tr_tfidf = X_tfidf_tune[tr_idx]
+            x_tr_bert = X_bert_tune[tr_idx]
             y_tr = y_tune[tr_idx]
-            x_va = X_tune[va_idx]
+            x_va_tfidf = X_tfidf_tune[va_idx]
+            x_va_bert = X_bert_tune[va_idx]
             y_va = y_tune[va_idx]
-            x_tr_bal, y_tr_bal = upsample_focus_classes(
-                x_tr, y_tr, focus_ids, seed=seed + fold
+            x_tr_tfidf_bal, y_tr_tfidf_bal = upsample_focus_classes(
+                x_tr_tfidf, y_tr, focus_ids, seed=seed + fold
+            )
+            x_tr_bert_bal, y_tr_bert_bal = upsample_focus_classes(
+                x_tr_bert, y_tr, focus_ids, seed=seed + fold
             )
 
-            model = LGBMClassifier(**params)
-            model.fit(to_lgbm_input(x_tr_bal), y_tr_bal)
-            pred = model.predict(to_lgbm_input(x_va))
+            model_tfidf = LGBMClassifier(**params)
+            model_tfidf.fit(to_lgbm_input(x_tr_tfidf_bal), y_tr_tfidf_bal)
+            model_bert = LGBMClassifier(**params)
+            model_bert.fit(to_lgbm_input(x_tr_bert_bal), y_tr_bert_bal)
+
+            proba_tfidf = model_tfidf.predict_proba(to_lgbm_input(x_va_tfidf))
+            proba_bert = model_bert.predict_proba(to_lgbm_input(x_va_bert))
+            proba_fused = blend_probabilities(proba_tfidf, proba_bert)
+            pred = np.argmax(proba_fused, axis=1)
             fold_scores.append(blend_score(y_va, pred, focus_ids))
 
         score = float(np.mean(fold_scores))
@@ -521,11 +544,12 @@ X_train_bert_balanced, y_train_bert_balanced = upsample_focus_classes(
 # now LGBM fit
 best_params, best_val_weighted_f1 = tune_lgbm_bayes_oof(
     X_train_encoded,
+    X_train_bert_encoded,
     y_train_enc,
     focus_ids=focus_ids,
     n_trials=HPO_N_TRIALS,
     n_init=HPO_N_INIT,
-    n_splits=HPO_OOF_SPLITS,
+    n_splits=HPO_INNER_OOF_SPLITS,
     seed=42,
 )
 
@@ -550,7 +574,7 @@ print("Validation Weighted F1:", f1_score(y_val, val_pred_label, average="weight
 print("\nClassification Report:")
 print(classification_report(y_val, val_pred_label))
 print("\nBest Params:", best_params)
-print("Best OOF Blended Score During HPO:", best_val_weighted_f1)
+print("Best Fusion-Aware OOF Score During HPO:", best_val_weighted_f1)
 print("Best Validation Blended Score After Threshold Tuning:", best_val_blended_score)
 print("Class Scales:", {
     label_encoder.inverse_transform([i])[0]: float(class_scales[i]) for i in focus_ids
@@ -602,10 +626,12 @@ def build_fold_matrices(train_df, infer_df):
     return X_train_tfidf_final, X_infer_tfidf_final, X_train_tab_local, X_infer_tab_local
 
 
-skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+skf = StratifiedKFold(n_splits=FINAL_OUTER_OOF_SPLITS, shuffle=True, random_state=42)
 n_classes = len(label_encoder.classes_)
-oof_proba = np.zeros((len(y_full_enc), n_classes), dtype=np.float32)
-test_proba_folds = []
+oof_proba_tfidf = np.zeros((len(y_full_enc), n_classes), dtype=np.float32)
+oof_proba_bert = np.zeros((len(y_full_enc), n_classes), dtype=np.float32)
+test_proba_tfidf_folds = []
+test_proba_bert_folds = []
 X_full_bert = compute_frozen_bert_embeddings(X_full["report"])
 X_test_bert_full = compute_frozen_bert_embeddings(X_test["report"])
 
@@ -616,7 +642,7 @@ for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y_full_enc)), y_f
     y_va_fold = y_full_enc[va_idx]
 
     X_tr_fold_enc, X_va_fold_enc, X_tr_tab_local, X_va_tab_local = build_fold_matrices(X_tr_df, X_va_df)
-    X_test_fold_enc, _, _, X_test_tab_local = build_fold_matrices(X_tr_df, X_test.reset_index(drop=True))
+    _, X_test_fold_enc, _, X_test_tab_local = build_fold_matrices(X_tr_df, X_test.reset_index(drop=True))
     X_tr_fold_bert_enc = hstack([X_tr_tab_local, csr_matrix(X_full_bert[tr_idx])], format="csr")
     X_va_fold_bert_enc = hstack([X_va_tab_local, csr_matrix(X_full_bert[va_idx])], format="csr")
     X_test_fold_bert_enc = hstack([X_test_tab_local, csr_matrix(X_test_bert_full)], format="csr")
@@ -635,15 +661,27 @@ for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y_full_enc)), y_f
 
     va_proba_tfidf_fold = lgbm_fold.predict_proba(to_lgbm_input(X_va_fold_enc))
     va_proba_bert_fold = lgbm_bert_fold.predict_proba(to_lgbm_input(X_va_fold_bert_enc))
+    oof_proba_tfidf[va_idx] = va_proba_tfidf_fold
+    oof_proba_bert[va_idx] = va_proba_bert_fold
+    # keep fixed-weight fold print as a quick sanity metric
     va_proba_fold = blend_probabilities(va_proba_tfidf_fold, va_proba_bert_fold)
-    oof_proba[va_idx] = va_proba_fold
     va_pred_fold = np.argmax(va_proba_fold, axis=1)
     print(f"Fold {fold} blended score (raw):", blend_score(y_va_fold, va_pred_fold, focus_ids))
 
     test_proba_tfidf_fold = lgbm_fold.predict_proba(to_lgbm_input(X_test_fold_enc))
     test_proba_bert_fold = lgbm_bert_fold.predict_proba(to_lgbm_input(X_test_fold_bert_enc))
-    test_proba_fold = blend_probabilities(test_proba_tfidf_fold, test_proba_bert_fold)
-    test_proba_folds.append(test_proba_fold)
+    test_proba_tfidf_folds.append(test_proba_tfidf_fold)
+    test_proba_bert_folds.append(test_proba_bert_fold)
+
+oof_stack_features = np.hstack([oof_proba_tfidf, oof_proba_bert]).astype(np.float32)
+stacker = LogisticRegression(
+    solver="lbfgs",
+    max_iter=2000,
+    class_weight="balanced",
+    random_state=42,
+)
+stacker.fit(oof_stack_features, y_full_enc)
+oof_proba = stacker.predict_proba(oof_stack_features)
 
 class_scales_oof, best_oof_blended_score = tune_class_scales(
     y_full_enc, oof_proba, focus_ids, rounds=4
@@ -653,7 +691,10 @@ print("OOF Class Scales:", {
     label_encoder.inverse_transform([i])[0]: float(class_scales_oof[i]) for i in focus_ids
 })
 
-test_proba = np.mean(np.stack(test_proba_folds, axis=0), axis=0)
+test_proba_tfidf = np.mean(np.stack(test_proba_tfidf_folds, axis=0), axis=0)
+test_proba_bert = np.mean(np.stack(test_proba_bert_folds, axis=0), axis=0)
+test_stack_features = np.hstack([test_proba_tfidf, test_proba_bert]).astype(np.float32)
+test_proba = stacker.predict_proba(test_stack_features)
 test_pred = np.argmax(apply_class_scales(test_proba, class_scales_oof), axis=1)
 test_pred_label = label_encoder.inverse_transform(test_pred)
 
