@@ -14,8 +14,6 @@ from sklearn.metrics import (
     classification_report, 
     f1_score, recall_score
 )
-from sklearn.model_selection import StratifiedKFold
-from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 
 warnings.filterwarnings(
@@ -40,27 +38,25 @@ FOCUS_CLASSES = [
     "Pineal tumour and Choroid plexus tumour",
     "Tumors of the sellar region",
 ]
-BERT_MODEL_NAME = "emilyalsentzer/Bio_ClinicalBERT"
-LATE_FUSION_TFIDF_WEIGHT = 0.60
 FIXED_LGBM_PARAMS = {
-    'n_estimators': 368,
-    'learning_rate': 0.08878083180388993,
-    'num_leaves': 122,
-    'max_depth': 16,
-    'min_child_samples': 66,
-    'subsample': 0.8665121298240996,
-    'colsample_bytree': 0.8118134210498688,
-    'reg_alpha': 4.06602059460523e-05,
-    'reg_lambda': 0.01918502780387322,
-    'objective': 'multiclass',
-    'class_weight': 'balanced',
-    'random_state': 42,
-    'n_jobs': -1,
+    'n_estimators': 695, 
+    'learning_rate': 0.09088841083294796, 
+    'num_leaves': 33, 
+    'max_depth': 12, 
+    'min_child_samples': 30, 
+    'subsample': 0.7950636550563394, 
+    'colsample_bytree': 0.8758706053844969, 
+    'reg_alpha': 9.381155722619392e-06, 
+    'reg_lambda': 0.04374699982986275, 
+    'objective': 'multiclass', 
+    'class_weight': 'balanced', 
+    'random_state': 42, 
+    'n_jobs': -1, 
     'verbosity': -1
 }
 FIXED_CLASS_SCALES = {
-    'Brain Metastase Tumour': 0.5,
-    'Pineal tumour and Choroid plexus tumour': 0.5,
+    'Brain Metastase Tumour': 0.70 , 
+    'Pineal tumour and Choroid plexus tumour': 1.0, 
     'Tumors of the sellar region': 1.0
 }
 
@@ -175,17 +171,12 @@ for col in train.columns:
         train[col] = train[col].fillna("Unknown")
         val[col] = val[col].fillna("Unknown")
         test[col] = test[col].fillna("Unknown")
-    # 对于数值列，检查是否真的是数值类型
-    elif pd.api.types.is_numeric_dtype(train[col]):
+    # take medians for the rest
+    else:
         median_value = train[col].median()
         train[col] = train[col].fillna(median_value)
         val[col] = val[col].fillna(median_value)
         test[col] = test[col].fillna(median_value)
-    else:
-        # 其他类型（如 datetime）填充 "Unknown"
-        train[col] = train[col].fillna("Unknown")
-        val[col] = val[col].fillna("Unknown")
-        test[col] = test[col].fillna("Unknown")
 
 # set the train/val/test sets
 X_train = train.drop(columns=["Overall_class"])
@@ -359,76 +350,9 @@ def tune_class_scales(y_true, proba, focus_ids, rounds=4):
     return scales, best_score
 
 
-def _select_torch_device():
-    import torch
-
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def compute_frozen_bert_embeddings(texts, model_name=BERT_MODEL_NAME, max_length=256, batch_size=16):
-    import torch
-    from transformers import AutoModel, AutoTokenizer
-
-    device = _select_torch_device()
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
-    model.to(device)
-    model.eval()
-
-    all_embeddings = []
-    texts = list(texts)
-    with torch.no_grad():
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i: i + batch_size]
-            enc = tokenizer(
-                batch,
-                padding=True,
-                truncation=True,
-                max_length=max_length,
-                return_tensors="pt",
-            )
-            enc = {k: v.to(device) for k, v in enc.items()}
-            out = model(**enc)
-            hidden = out.last_hidden_state
-            mask = enc["attention_mask"].unsqueeze(-1).float()
-            # Mean pooling over valid tokens -> 768-dim embedding for BERT-base.
-            pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-6)
-            all_embeddings.append(pooled.cpu().numpy().astype(np.float32))
-    return np.vstack(all_embeddings)
-
-
-def blend_probabilities(proba_tfidf, proba_bert, tfidf_weight=LATE_FUSION_TFIDF_WEIGHT):
-    bert_weight = 1.0 - float(tfidf_weight)
-    return (float(tfidf_weight) * proba_tfidf) + (bert_weight * proba_bert)
-
-
-# frozen ClinicalBERT embeddings
-X_train_bert = compute_frozen_bert_embeddings(X_train["report"])
-X_val_bert = compute_frozen_bert_embeddings(X_val["report"])
-X_test_bert = compute_frozen_bert_embeddings(X_test["report"])
-X_train_bert_encoded = hstack(
-    [csr_matrix(X_train_tab_encoded.to_numpy(dtype="float32")), csr_matrix(X_train_bert)],
-    format="csr",
-)
-X_val_bert_encoded = hstack(
-    [csr_matrix(X_val_tab_encoded.to_numpy(dtype="float32")), csr_matrix(X_val_bert)],
-    format="csr",
-)
-X_test_bert_encoded = hstack(
-    [csr_matrix(X_test_tab_encoded.to_numpy(dtype="float32")), csr_matrix(X_test_bert)],
-    format="csr",
-)
-
 # call the upsampling for imbalanced dataset
 X_train_balanced, y_train_balanced = upsample_focus_classes(
     X_train_encoded, y_train_enc, focus_ids, seed=42
-)
-X_train_bert_balanced, y_train_bert_balanced = upsample_focus_classes(
-    X_train_bert_encoded, y_train_enc, focus_ids, seed=42
 )
 
 # now LGBM fit (fixed params, no Bayesian HPO)
@@ -436,13 +360,9 @@ best_params = FIXED_LGBM_PARAMS.copy()
 
 lgbm = LGBMClassifier(**best_params)
 lgbm.fit(to_lgbm_input(X_train_balanced), y_train_balanced)
-lgbm_bert = LGBMClassifier(**best_params)
-lgbm_bert.fit(to_lgbm_input(X_train_bert_balanced), y_train_bert_balanced)
 
 # probability scaling
-val_proba_tfidf = lgbm.predict_proba(to_lgbm_input(X_val_encoded))
-val_proba_bert = lgbm_bert.predict_proba(to_lgbm_input(X_val_bert_encoded))
-val_proba = blend_probabilities(val_proba_tfidf, val_proba_bert)
+val_proba = lgbm.predict_proba(to_lgbm_input(X_val_encoded))
 class_scales, best_val_blended_score = tune_class_scales(y_val_enc, val_proba, focus_ids, rounds=4)
 val_pred = np.argmax(apply_class_scales(val_proba, class_scales), axis=1)
 val_pred_label = label_encoder.inverse_transform(val_pred)
@@ -459,122 +379,53 @@ print("Class Scales:", {
     label_encoder.inverse_transform([i])[0]: float(class_scales[i]) for i in focus_ids
 })
 
-# train again on train + val with leakage-free 5-fold OOF calibration
-X_full = pd.concat([X_train, X_val], axis=0).reset_index(drop=True)
-y_full = pd.concat([y_train, y_val], axis=0).reset_index(drop=True)
+# train again on train + val and infer test
+X_full = pd.concat([X_train, X_val], axis=0)
+y_full = pd.concat([y_train, y_val], axis=0)
+X_full_tab = X_full.drop(columns=["report", "case_id"], errors="ignore")
+X_test_tab_final = X_test.drop(columns=["report", "case_id"], errors="ignore")
+full_tab_all = pd.concat([X_full_tab, X_test_tab_final], axis=0)
+full_tab_all = pd.get_dummies(full_tab_all, drop_first=False)
+X_full_tab_encoded = full_tab_all.iloc[: len(X_full_tab), :]
+X_test_tab_final_encoded = full_tab_all.iloc[len(X_full_tab):, :]
+
+tfidf_final_word = TfidfVectorizer(
+    ngram_range=(1, 2),
+    min_df=2,
+    max_features=2500,
+)
+tfidf_final_char = TfidfVectorizer(
+    analyzer="char_wb",
+    ngram_range=(3, 5),
+    min_df=2,
+    max_features=1200,
+)
+
+X_full_text_word = tfidf_final_word.fit_transform(X_full["report"])
+X_test_text_word_final = tfidf_final_word.transform(X_test["report"])
+X_full_text_char = tfidf_final_char.fit_transform(X_full["report"])
+X_test_text_char_final = tfidf_final_char.transform(X_test["report"])
+X_full_text = hstack([X_full_text_word, X_full_text_char], format="csr")
+X_test_text_final = hstack([X_test_text_word_final, X_test_text_char_final], format="csr")
+
+X_full_encoded = hstack(
+    [csr_matrix(X_full_tab_encoded.to_numpy(dtype="float32")), X_full_text],
+    format="csr",
+)
+X_test_final = hstack(
+    [csr_matrix(X_test_tab_final_encoded.to_numpy(dtype="float32")), X_test_text_final],
+    format="csr",
+)
 y_full_enc = label_encoder.transform(y_full)
-
-
-def build_fold_matrices(train_df, infer_df):
-    train_tab = train_df.drop(columns=["report", "case_id"], errors="ignore").copy()
-    infer_tab = infer_df.drop(columns=["report", "case_id"], errors="ignore").copy()
-
-    train_tab = pd.get_dummies(train_tab, drop_first=False)
-    infer_tab = pd.get_dummies(infer_tab, drop_first=False)
-    infer_tab = infer_tab.reindex(columns=train_tab.columns, fill_value=0)
-
-    tfidf_word_local = TfidfVectorizer(
-        ngram_range=(1, 2),
-        min_df=2,
-        max_features=2500,
-    )
-    tfidf_char_local = TfidfVectorizer(
-        analyzer="char_wb",
-        ngram_range=(3, 5),
-        min_df=2,
-        max_features=1200,
-    )
-
-    X_train_text_word_local = tfidf_word_local.fit_transform(train_df["report"])
-    X_infer_text_word_local = tfidf_word_local.transform(infer_df["report"])
-    X_train_text_char_local = tfidf_char_local.fit_transform(train_df["report"])
-    X_infer_text_char_local = tfidf_char_local.transform(infer_df["report"])
-    X_train_text_local = hstack(
-        [X_train_text_word_local, X_train_text_char_local], 
-        format="csr"
-    )
-    X_infer_text_local = hstack(
-        [X_infer_text_word_local, X_infer_text_char_local], 
-        format="csr"
-    )
-
-    X_train_tab_local = csr_matrix(train_tab.to_numpy(dtype="float32"))
-    X_infer_tab_local = csr_matrix(infer_tab.to_numpy(dtype="float32"))
-    X_train_tfidf_final = hstack([X_train_tab_local, X_train_text_local], format="csr")
-    X_infer_tfidf_final = hstack([X_infer_tab_local, X_infer_text_local], format="csr")
-    return X_train_tfidf_final, X_infer_tfidf_final, X_train_tab_local, X_infer_tab_local
-
-
-skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-n_classes = len(label_encoder.classes_)
-oof_proba_tfidf = np.zeros((len(y_full_enc), n_classes), dtype=np.float32)
-oof_proba_bert = np.zeros((len(y_full_enc), n_classes), dtype=np.float32)
-test_proba_tfidf_folds = []
-test_proba_bert_folds = []
-X_full_bert = compute_frozen_bert_embeddings(X_full["report"])
-X_test_bert_full = compute_frozen_bert_embeddings(X_test["report"])
-
-for fold, (tr_idx, va_idx) in enumerate(skf.split(np.zeros(len(y_full_enc)), y_full_enc), start=1):
-    X_tr_df = X_full.iloc[tr_idx].reset_index(drop=True)
-    X_va_df = X_full.iloc[va_idx].reset_index(drop=True)
-    y_tr_fold = y_full_enc[tr_idx]
-    y_va_fold = y_full_enc[va_idx]
-
-    X_tr_fold_enc, X_va_fold_enc, X_tr_tab_local, X_va_tab_local = build_fold_matrices(X_tr_df, X_va_df)
-    _, X_test_fold_enc, _, X_test_tab_local = build_fold_matrices(X_tr_df, X_test.reset_index(drop=True))
-    X_tr_fold_bert_enc = hstack([X_tr_tab_local, csr_matrix(X_full_bert[tr_idx])], format="csr")
-    X_va_fold_bert_enc = hstack([X_va_tab_local, csr_matrix(X_full_bert[va_idx])], format="csr")
-    X_test_fold_bert_enc = hstack([X_test_tab_local, csr_matrix(X_test_bert_full)], format="csr")
-
-    X_tr_fold_bal, y_tr_fold_bal = upsample_focus_classes(
-        X_tr_fold_enc, y_tr_fold, focus_ids, seed=42 + fold
-    )
-    X_tr_fold_bert_bal, y_tr_fold_bert_bal = upsample_focus_classes(
-        X_tr_fold_bert_enc, y_tr_fold, focus_ids, seed=42 + fold
-    )
-
-    lgbm_fold = LGBMClassifier(**best_params)
-    lgbm_fold.fit(to_lgbm_input(X_tr_fold_bal), y_tr_fold_bal)
-    lgbm_bert_fold = LGBMClassifier(**best_params)
-    lgbm_bert_fold.fit(to_lgbm_input(X_tr_fold_bert_bal), y_tr_fold_bert_bal)
-
-    va_proba_tfidf_fold = lgbm_fold.predict_proba(to_lgbm_input(X_va_fold_enc))
-    va_proba_bert_fold = lgbm_bert_fold.predict_proba(to_lgbm_input(X_va_fold_bert_enc))
-    oof_proba_tfidf[va_idx] = va_proba_tfidf_fold
-    oof_proba_bert[va_idx] = va_proba_bert_fold
-    # Fold print stays as a quick sanity metric using fixed weighted fusion.
-    va_proba_fold = blend_probabilities(va_proba_tfidf_fold, va_proba_bert_fold)
-    va_pred_fold = np.argmax(va_proba_fold, axis=1)
-    print(f"Fold {fold} blended score (raw):", blend_score(y_va_fold, va_pred_fold, focus_ids))
-
-    test_proba_tfidf_fold = lgbm_fold.predict_proba(to_lgbm_input(X_test_fold_enc))
-    test_proba_bert_fold = lgbm_bert_fold.predict_proba(to_lgbm_input(X_test_fold_bert_enc))
-    test_proba_tfidf_folds.append(test_proba_tfidf_fold)
-    test_proba_bert_folds.append(test_proba_bert_fold)
-
-oof_stack_features = np.hstack([oof_proba_tfidf, oof_proba_bert]).astype(np.float32)
-stacker = LogisticRegression(
-    solver="lbfgs",
-    max_iter=2000,
-    class_weight="balanced",
-    random_state=42,
+X_full_balanced, y_full_balanced = upsample_focus_classes(
+    X_full_encoded, y_full_enc, focus_ids, seed=42
 )
-stacker.fit(oof_stack_features, y_full_enc)
-oof_proba = stacker.predict_proba(oof_stack_features)
 
-class_scales_oof, best_oof_blended_score = tune_class_scales(
-    y_full_enc, oof_proba, focus_ids, rounds=4
-)
-print("Best OOF Blended Score After Threshold Tuning:", best_oof_blended_score)
-print("OOF Class Scales:", {
-    label_encoder.inverse_transform([i])[0]: float(class_scales_oof[i]) for i in focus_ids
-})
+lgbm_final = LGBMClassifier(**best_params)
+lgbm_final.fit(to_lgbm_input(X_full_balanced), y_full_balanced)
 
-test_proba_tfidf = np.mean(np.stack(test_proba_tfidf_folds, axis=0), axis=0)
-test_proba_bert = np.mean(np.stack(test_proba_bert_folds, axis=0), axis=0)
-test_stack_features = np.hstack([test_proba_tfidf, test_proba_bert]).astype(np.float32)
-test_proba = stacker.predict_proba(test_stack_features)
-test_pred = np.argmax(apply_class_scales(test_proba, class_scales_oof), axis=1)
+test_proba = lgbm_final.predict_proba(to_lgbm_input(X_test_final))
+test_pred = np.argmax(apply_class_scales(test_proba, class_scales), axis=1)
 test_pred_label = label_encoder.inverse_transform(test_pred)
 
 # final submission frame
