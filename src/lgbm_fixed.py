@@ -43,24 +43,24 @@ FOCUS_CLASSES = [
 BERT_MODEL_NAME = "emilyalsentzer/Bio_ClinicalBERT"
 LATE_FUSION_TFIDF_WEIGHT = 0.60
 FIXED_LGBM_PARAMS = {
-    'n_estimators': 695, 
-    'learning_rate': 0.09088841083294796, 
-    'num_leaves': 33, 
-    'max_depth': 12, 
-    'min_child_samples': 30, 
-    'subsample': 0.7950636550563394, 
-    'colsample_bytree': 0.8758706053844969, 
-    'reg_alpha': 9.381155722619392e-06, 
-    'reg_lambda': 0.04374699982986275, 
-    'objective': 'multiclass', 
-    'class_weight': 'balanced', 
-    'random_state': 42, 
-    'n_jobs': -1, 
+    'n_estimators': 368,
+    'learning_rate': 0.08878083180388993,
+    'num_leaves': 122,
+    'max_depth': 16,
+    'min_child_samples': 66,
+    'subsample': 0.8665121298240996,
+    'colsample_bytree': 0.8118134210498688,
+    'reg_alpha': 4.06602059460523e-05,
+    'reg_lambda': 0.01918502780387322,
+    'objective': 'multiclass',
+    'class_weight': 'balanced',
+    'random_state': 42,
+    'n_jobs': -1,
     'verbosity': -1
 }
 FIXED_CLASS_SCALES = {
-    'Brain Metastase Tumour': 0.70 , 
-    'Pineal tumour and Choroid plexus tumour': 1.0, 
+    'Brain Metastase Tumour': 0.5,
+    'Pineal tumour and Choroid plexus tumour': 0.5,
     'Tumors of the sellar region': 1.0
 }
 
