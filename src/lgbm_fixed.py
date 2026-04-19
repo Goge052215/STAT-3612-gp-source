@@ -8,6 +8,7 @@ import pandas as pd
 from lightgbm import LGBMClassifier
 from scipy.sparse import csr_matrix, hstack, vstack
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.feature_selection import f_classif
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import (
     accuracy_score, 
@@ -33,6 +34,7 @@ start_time = time.time()
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 CLINICAL_DIR = DATA_DIR / "clinical_information"
+RADIOMICS_DIR = DATA_DIR / "radiomics_info"
 FOCUS_CLASSES = [
     "Brain Metastase Tumour",
     "Pineal tumour and Choroid plexus tumour",
@@ -55,7 +57,7 @@ FIXED_LGBM_PARAMS = {
     'verbosity': -1
 }
 FIXED_CLASS_SCALES = {
-    'Brain Metastase Tumour': 0.70 , 
+    'Brain Metastase Tumour': 1.65, 
     'Pineal tumour and Choroid plexus tumour': 1.0, 
     'Tumors of the sellar region': 1.0
 }
@@ -71,6 +73,65 @@ def load_optional_clinical_csv(name: str):
     if csv_path.exists():
         return pd.read_csv(csv_path)
     return None
+
+
+def load_optional_radiomics_split(name: str):
+    split_dir = RADIOMICS_DIR / name
+    if not split_dir.exists():
+        return None
+
+    files = sorted(split_dir.glob(f"*_radiomics_{name}.csv"))
+    if not files:
+        return None
+
+    merged = None
+    for fp in files:
+        modality = fp.name.replace(f"_radiomics_{name}.csv", "")
+        df = pd.read_csv(fp, encoding="utf-8-sig")
+        if "case_id" not in df.columns:
+            continue
+
+        # Drop metadata columns; keep only radiomics descriptors.
+        df = df.drop(columns=["sex", "age", "modality"], errors="ignore")
+        rad_cols = [c for c in df.columns if c.startswith("rad_")]
+        if not rad_cols:
+            continue
+
+        keep = df[["case_id"] + rad_cols].copy()
+        keep["case_id"] = pd.to_numeric(keep["case_id"], errors="coerce")
+        keep = keep.dropna(subset=["case_id"])
+        keep["case_id"] = keep["case_id"].astype(int)
+        keep = keep.rename(columns={c: f"{modality}__{c}" for c in rad_cols})
+
+        if merged is None:
+            merged = keep
+        else:
+            merged = pd.merge(merged, keep, on="case_id", how="outer")
+
+    return merged
+
+
+def select_radiomics_by_anova(train_df: pd.DataFrame, p_threshold: float = 0.05):
+    radiomics_cols = [c for c in train_df.columns if "__rad_" in c or c.startswith("rad_")]
+    if not radiomics_cols:
+        return []
+
+    y = train_df["Overall_class"]
+    valid_mask = y.notna()
+    if int(valid_mask.sum()) == 0 or int(y[valid_mask].nunique()) < 2:
+        return radiomics_cols
+
+    X = train_df.loc[valid_mask, radiomics_cols].apply(pd.to_numeric, errors="coerce")
+    X = X.fillna(X.median())
+    y = y.loc[valid_mask]
+
+    _, pvals = f_classif(X, y)
+    selected = [
+        c
+        for c, p in zip(radiomics_cols, pvals)
+        if np.isfinite(p) and float(p) <= float(p_threshold)
+    ]
+    return selected
 
 # define datasets
 train_csv = load_optional_clinical_csv("train")
@@ -113,6 +174,65 @@ def combine_split(clinical_df: pd.DataFrame | None, json_df: pd.DataFrame):
 train_df = combine_split(train_csv, train_df_json)
 val_df = combine_split(val_csv, val_df_json)
 test_df = combine_split(test_csv, test_df_json)
+
+# optional radiomics merge + ANOVA feature filtering (drop p > 0.05)
+train_rad = load_optional_radiomics_split("train")
+val_rad = load_optional_radiomics_split("val")
+test_rad = load_optional_radiomics_split("test")
+if train_rad is not None:
+    train_df = pd.merge(train_df, train_rad, on="case_id", how="left")
+if val_rad is not None:
+    val_df = pd.merge(val_df, val_rad, on="case_id", how="left")
+if test_rad is not None:
+    test_df = pd.merge(test_df, test_rad, on="case_id", how="left")
+
+selected_radiomics = select_radiomics_by_anova(train_df, p_threshold=0.05)
+all_radiomics = [c for c in train_df.columns if "__rad_" in c or c.startswith("rad_")]
+drop_radiomics = [c for c in all_radiomics if c not in set(selected_radiomics)]
+if drop_radiomics:
+    train_df = train_df.drop(columns=drop_radiomics, errors="ignore")
+    val_df = val_df.drop(columns=drop_radiomics, errors="ignore")
+    test_df = test_df.drop(columns=drop_radiomics, errors="ignore")
+if all_radiomics:
+    print(
+        f"Radiomics ANOVA filter: kept {len(selected_radiomics)}/{len(all_radiomics)} features "
+        f"(p <= 0.05)."
+    )
+
+# Additional missingness policy for retained radiomics.
+RADIOMICS_MAX_MISSING_RATE = 0.40
+if selected_radiomics:
+    too_sparse = [
+        c for c in selected_radiomics
+        if float(train_df[c].isna().mean()) > RADIOMICS_MAX_MISSING_RATE
+    ]
+    if too_sparse:
+        train_df = train_df.drop(columns=too_sparse, errors="ignore")
+        val_df = val_df.drop(columns=too_sparse, errors="ignore")
+        test_df = test_df.drop(columns=too_sparse, errors="ignore")
+        selected_radiomics = [c for c in selected_radiomics if c not in set(too_sparse)]
+        print(
+            f"Radiomics missingness filter: dropped {len(too_sparse)} columns "
+            f"(missing > {RADIOMICS_MAX_MISSING_RATE:.0%})."
+        )
+
+    for c in selected_radiomics:
+        if float(train_df[c].isna().mean()) > 0.10:
+            if c not in val_df.columns:
+                val_df[c] = np.nan
+            if c not in test_df.columns:
+                test_df[c] = np.nan
+            ind = f"{c}__is_missing"
+            train_df[ind] = train_df[c].isna().astype(int)
+            val_df[ind] = val_df[c].isna().astype(int)
+            test_df[ind] = test_df[c].isna().astype(int)
+
+# ensure val/test have all train feature columns used in downstream fill logic
+for c in train_df.columns:
+    if c not in val_df.columns:
+        val_df[c] = np.nan
+    if c not in test_df.columns:
+        test_df[c] = np.nan
 
 # feature augmentation
 def add_report_features(df):
