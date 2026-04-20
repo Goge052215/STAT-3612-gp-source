@@ -2,20 +2,61 @@
 
 The clinical management of central nervous system (CNS) tumors is heavily dependent on accurate presurgical classification. Recent epidemiological data from the CBTRUS report highlights severe incidence imbalances among brain tumors—where meningiomas and gliomas dominate, but rare subtypes like medulloblastomas and pineal region tumors present distinct diagnostic challenges and high mortality rates (Price et al., 2024). To address this, the field of radiomics has championed the conversion of clinical observations and medical imaging into mineable, high-dimensional data (Gillies et al., 2016).
 
-Building upon these foundations, our final production pipeline is the LightGBM system implemented in `src/lgbm.py`. The central idea is to transform each patient into a fused representation $x_i = \left[x_i^{\text{tab}}, x_i^{\text{text}}\right]$, where $x_i^{\text{tab}}$ contains structured clinical features and engineered report indicators, while $x_i^{\text{text}}$ contains sparse TF-IDF features extracted from the radiology report. We then train a multiclass gradient-boosted tree model and explicitly tune the decision surface for minority-class recall. 
+Building upon these foundations, our current production workflow is a LightGBM-centered multimodal pipeline with radiomics-aware filtering and calibrated class-scale tuning. The core representation remains
 
-This combination is well-suited for heterogeneous tabular-text data and is computationally efficient relative to heavier neural alternatives (Ke et al., 2017; Pedregosa et al., 2011).
+$$
+    x_i = \left[x_i^{\text{tab}}, x_i^{\text{text}}\right],
+$$
 
-The most important practical result is that the final LGBM pipeline achieves very strong validation performance while remaining fast enough for repeated experimentation:
+where $x_i^{\text{tab}}$ includes structured clinical variables, report-derived indicators, and retained radiomics descriptors, and $x_i^{\text{text}}$ is a sparse TF-IDF representation of the report.
 
-- Validation Accuracy: $0.9682$
-- Validation Macro $F_1$: $0.9744$
-- Validation Weighted $F_1$: $0.9684$
-- Best blended validation score after class-scale tuning: $0.9768$
+This combination is well-suited for heterogeneous tabular-text data and remains computationally efficient relative to heavier neural alternatives (Ke et al., 2017; Pedregosa et al., 2011).
 
-This section explains why the pipeline works, how each design choice maps to the code in `src/lgbm.py`, and why this approach ultimately outperforms our earlier BPNN direction from the project plan.
+### Workflow Update (Current)
 
-Note: all `python` code blocks in this document are intentionally trimmed for better display and readability. For the complete implementation, check `src/lgbm.py` and the supporting helpers in `src/utils.py`.
+The implementation now follows three aligned scripts:
+
+- `src/lgbm_fixed.py`: fixed-parameter production variant (no HPO), with radiomics filtering, 5-fold CV reporting, and LGBM-only inference.
+- `src/lgbm.py`: always-on Bayesian HPO workflow with K-fold diagnostics and OOF-driven class-scale tuning.
+- `src/stat3612.ipynb`: notebook version of the same workflow, including local `bayes_optimize` and local `build_submission` for Kaggle portability.
+
+Key updates versus older drafts:
+
+- **Radiomics pipeline**:
+  - modality-wise radiomics merge;
+  - ANOVA filtering (`p <= 0.05`);
+  - sparse-column dropping by missing-rate threshold;
+  - missingness indicator features for retained radiomics columns.
+- **Validation diagnostics**:
+  - 5-fold stratified CV score monitoring on train+val.
+- **Decision layer**:
+  - class-scale tuning on probabilities;
+  - OOF-driven class-scale tuning is used by default in `lgbm.py`.
+- **Submission path**:
+  - final `lgbm.py` submission is produced by training one final model on `train+val` with HPO-selected params, then applying OOF-tuned scales at inference.
+
+Recent observed run snapshot (fixed-parameter reference, `lgbm_fixed.py`):
+
+- Validation Accuracy: `0.8798586572438163`
+- Validation Micro F1: `0.8798586572438163`
+- Validation Macro F1: `0.807533609097973`
+- Validation Weighted F1: `0.8776004438803224`
+- Best blended score (val-tuned scales): `0.847743174261604`
+- Best blended score after threshold tuning: `0.8220003917228115`
+- Best class scales:
+  - Brain Metastase Tumour: `1.0`
+  - Pineal tumour and Choroid plexus tumour: `3.0`
+  - Tumors of the sellar region: `1.9`
+- Generated predictions: `378`
+- Submission path: `/kaggle/working/submission.csv`
+- Kaggle Public score: `0.7432`
+- Overall running time: `1038.50 seconds`
+
+This indicates the current LGBM pipeline with radiomics filtering and scale tuning remains competitive and stable for repeated experimentation.
+
+This section explains why the pipeline works, how each design choice maps to the code in `src/lgbm.py` and `src/lgbm_fixed.py`, and why this approach ultimately outperforms our earlier BPNN direction from the project plan.
+
+Note: all `python` code blocks in this document are intentionally trimmed for readability. For full implementations, see `src/lgbm.py`, `src/lgbm_fixed.py`, and `src/stat3612.ipynb`.
 
 ### Documentation Navigation
 
@@ -44,7 +85,7 @@ $$
     r = \frac{\max_k n_k}{\min_k n_k}
 $$
 
-is large, especially for the Pineal/Choroid and sellar-region classes. Since Kaggle evaluates macro $F_1$, every class contributes equally to the score,
+is large, especially for the Pineal/Choroid and sellar-region classes. Since Kaggle evaluates macro-$F_1$, every class contributes equally to the score,
 
 $$
     F_1^{\text{ macro}} = \frac{1}{K}\sum_{k=1}^{K} F_{1,k}
@@ -52,7 +93,7 @@ $$
 
 so a model that performs extremely well on common classes but misses rare classes is still suboptimal.
 
-This is why the pipeline does not optimize plain accuracy alone. Instead, it uses a custom blended objective that incorporates weighted $F_1$, macro $F_1$, and minority recall directly.
+This is why the pipeline does not optimize plain accuracy alone. Instead, it uses a custom blended objective that incorporates weighted-$F_1$, macro-$F_1$, and minority recall directly.
 
 ### 2. TF-IDF Vectorization
 
@@ -162,19 +203,21 @@ $$
 
 where each $f_m$ is a tree, $\ell$ is the multiclass loss, and $\Omega$ regularizes tree complexity.
 
-The final tuned hyperparameters from the strongest validation run are:
+In `lgbm.py`, hyperparameters are not fixed constants. They are learned by Bayesian HPO each run, and the selected best parameter dictionary is printed during training (`Best Params From Bayes HPO`).
+
+The search space is mapped through `normalize_lgbm_params`, which enforces practical bounds:
 
 ```python
 {
-    'n_estimators': 376, 
-    'learning_rate': 0.09058074809146924, 
-    'num_leaves': 118, 
-    'max_depth': 17, 
-    'min_child_samples': 64, 
-    'subsample': 0.8960453870151097, 
-    'colsample_bytree': 0.8409729009868997, 
-    'reg_alpha': 0.00017485035139246937, 
-    'reg_lambda': 0.2807887164806946, 
+    'n_estimators': [120, 800],
+    'learning_rate': [10^-2.5, 10^-0.7],
+    'num_leaves': [16, 128],
+    'max_depth': [-1, 20],
+    'min_child_samples': [5, 80],
+    'subsample': [0.6, 1.0],
+    'colsample_bytree': [0.6, 1.0],
+    'reg_alpha': [10^-6, 10^1],
+    'reg_lambda': [10^-6, 10^1],
     'objective': 'multiclass', 
     'class_weight': 'balanced', 
     'random_state': 42, 
@@ -182,14 +225,9 @@ The final tuned hyperparameters from the strongest validation run are:
 }
 ```
 
-These values reflect an important bias-variance tradeoff:
+This setup keeps the optimization flexible while still bounded, and lets each run adapt to the current feature distribution and split.
 
-- a relatively high learning rate with fewer trees provides a fast, robust convergence;
-- `num_leaves` and `max_depth` are large, allowing the model to capture complex non-linear interactions between text and clinical indicators;
-- to prevent overfitting from such deep trees, `min_child_samples` is set strictly high (64) to restrict overly specific leaf nodes;
-- strong $L_2$ regularization (`reg_lambda`) alongside high subsampling constraints acts as an additional bulwark against variance.
-
-The model also uses `class_weight="balanced"`, which reweights each class approximately inversely to its frequency. If $\pi_k$ is the empirical class proportion, then the class weight behaves roughly like
+The model still uses `class_weight="balanced"`, which reweights each class approximately inversely to its frequency. If $\pi_k$ is the empirical class proportion, then the class weight behaves roughly like
 
 $$
     w_k \propto \frac{1}{\pi_k},
@@ -282,10 +320,10 @@ where $s_k > 0$ is a tunable scale for class $k$.
 
 This matters because multiclass argmax decisions are sensitive to calibration. Even if the model ranks the correct minority class highly, a small probability deficit can still cause an incorrect label. Scaling effectively shifts class-wise decision boundaries after training, which is often cheaper and more stable than retraining the full model.
 
-In the strongest validation run, the tuned scales were:
+In the current `lgbm.py`, scale tuning is done in two stages:
 
-- Pineal tumour and Choroid plexus tumour: $0.5$
-- Tumors of the sellar region: $1.0$
+1. tune scales on the holdout validation split (`val_tuned_blended_score`);
+2. re-tune scales from out-of-fold probabilities on `train+val` and use these OOF scales as default for final inference.
 
 This post-processing stage is implemented in `lgbm.py` as:
 
@@ -312,31 +350,35 @@ def tune_class_scales(y_true, proba, focus_ids, rounds=4):
     return scales, best_score
 ```
 
-This tells us something interesting: the sellar-region class benefited from additional posterior amplification, while Pineal/Choroid performance was already sufficiently strong after upsampling and feature engineering.
+And the OOF default is produced by:
+
+```python
+oof_scales, oof_blended_score = tune_class_scales_from_oof(
+    X_oof, y_oof, X_test,
+    best_params=best_params,
+    focus_ids=focus_ids,
+    n_splits=OOF_SCALE_N_SPLITS,
+    seed=KFOLD_RANDOM_STATE,
+)
+class_scales = oof_scales
+```
 
 ### 7. Training, Validation, and Submission
 
-The workflow in `lgbm.py` is:
+The current workflow in `lgbm.py` is:
 
 1. fit preprocessing on train, then transform validation and test;
 2. upsample focus classes on train only;
-3. run Bayesian HPO on the training/validation split;
-4. fit the best LGBM configuration on the balanced training set;
-5. tune class scales on validation predictions;
-6. report validation metrics;
-7. rebuild features on the combined dataset ($\text{train} + \text{val}$);
-8. execute a **5-Fold Stratified Cross-Validation Ensemble** to generate final Kaggle test predictions.
+3. run 5-fold stratified CV diagnostics on `train+val` (with fold-level HPO and fold-level scale tuning);
+4. run Bayesian HPO on the main training/validation split to obtain `best_params`;
+5. fit the best LGBM configuration on the balanced training set;
+6. tune class scales on validation predictions;
+7. tune OOF class scales on `train+val` and set these as default scales;
+8. report validation metrics;
+9. rebuild features on the combined dataset ($\text{train} + \text{val}$);
+10. fit one final model with `best_params` on balanced `train+val` and infer test with OOF-tuned scales.
 
-This separation is important. Hyperparameter tuning and scale tuning use a single validation split, but the final Kaggle submission relies on a robust ensembling strategy over the full labeled sample. 
-
-Instead of fitting a single model on $100\%$ of the combined data, the script splits the data into 5 stratified folds. For each fold:
-- Minority classes are upsampled *only* within the training portion of the fold to prevent data leakage.
-- A LightGBM model is trained and evaluated on the holdout fold.
-- The trained fold-model predicts class probabilities for the Kaggle test set.
-
-Finally, the script averages the predicted test probabilities across all 5 folds ("soft voting") and takes the `argmax` of this average to determine the final submitted class. 
-
-This ensembling strategy is a crucial defense against the "Private Leaderboard shake-up." Averaging predictions from multiple models reduces estimation variance and creates a much smoother, more stable decision boundary than a single model. The fact that the 5-Fold CV ensemble maintained a Public Kaggle score of $0.98996$ proves that the model is genuinely capturing the underlying signal rather than just overfitting to a specific data split.
+This separation is important. CV is used for robustness diagnostics and OOF scale estimation, while the final submission model is trained on the full labeled sample (`train+val`) with HPO-selected parameters.
 
 The validation report shows that the model is not merely strong on the majority classes:
 
@@ -357,9 +399,9 @@ First, LightGBM is a boosting method, so it reduces bias by sequentially correct
 
 Second, LightGBM is more computationally efficient when repeated tuning is required. Since the project evolved through many iterations of HPO, feature engineering, and threshold tuning, training speed mattered a lot. The leaf-wise LightGBM implementation gave more performance per unit time than RF in later experiments (Ke et al., 2017).
 
-Third, the final LightGBM pipeline makes better use of the hybrid feature space. Once the text representation was strengthened with word + char TF-IDF and domain indicators, the non-linear splits in boosted trees captured these interactions more effectively than a bagged forest. In practical terms, this is why LGBM became the production model and why the Kaggle score rose to $0.98996$.
+Third, the final LightGBM pipeline makes better use of the hybrid feature space. Once the text representation was strengthened with word + char TF-IDF and domain indicators, the non-linear splits in boosted trees captured these interactions more effectively than a bagged forest. In practical terms, this is why LGBM became the production model.
 
-So the answer is not that RF is bad. Rather, RF was a valuable benchmark, but LightGBM provided the best combination of speed, flexibility, and macro $F_1$ performance.
+So the answer is not that RF is bad. Rather, RF was a valuable benchmark, but LightGBM provided the best combination of speed, flexibility, and macro-$F_1$ performance.
 
 #### Why does BPNN fail here, even though our previous paper used it?
 
@@ -386,6 +428,44 @@ A useful way to summarize the difference is:
 - in this project, the decisive signal is sparse, localized, and strongly keyword-driven, which is exactly the regime where TF-IDF + boosted trees is hard to beat.
 
 So BPNN does not "fail" in the sense of being unusable. It simply fails to become the best final model. It remains a reasonable complementary model for ensembling, but not the optimal standalone solution for this dataset.
+
+### Results
+
+#### Classification Report
+
+The latest reported validation snapshot below comes from the fixed-parameter reference workflow (`lgbm_fixed.py`). `lgbm.py` itself is HPO-driven and can produce different metrics per run.
+
+| Metric | Value |
+|---|---:|
+| Accuracy | 0.8798586572438163 |
+| Micro-$F_1$ | 0.8798586572438163 |
+| Macro-$F_1$ | 0.807533609097973 |
+| Weighted-$F_1$ | 0.8776004438803224 |
+| Blended score (val-tuned scales) | 0.847743174261604 |
+| Blended score after threshold tuning | 0.8220003917228115 |
+
+Class-wise validation summary:
+
+| Class | Precision | Recall | $F_1$ | Support |
+|---|---:|---:|---:|---:|
+| Brain Metastase Tumour | 0.74 | 0.64 | 0.69 | 36 |
+| Glioma | 0.87 | 0.89 | 0.88 | 132 |
+| Meningioma | 0.93 | 0.96 | 0.94 | 104 |
+| Pineal tumour and Choroid plexus tumour | 0.67 | 0.67 | 0.67 | 3 |
+| Tumors of the sellar region | 1.00 | 0.75 | 0.86 | 8 |
+
+The current strategy selected by validation is `LGBM Only` with class-scale tuning.
+
+#### Running Time
+
+Our final fixed-parameter workflow remains practical for experimentation and reproducibility, while still incorporating radiomics selection, CV diagnostics, and class-scale tuning.
+
+| Environment | Time (seconds) |
+|---|---:|
+| Kaggle (`submission.csv` run) | 1038.50 |
+
+This timing includes the end-to-end fixed-parameter run (feature processing, CV diagnostics, validation evaluation, and submission generation).
+
 
 ### References
 
