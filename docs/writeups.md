@@ -12,52 +12,6 @@ where $x_i^{\text{tab}}$ includes structured clinical variables, report-derived 
 
 This combination is well-suited for heterogeneous tabular-text data and remains computationally efficient relative to heavier neural alternatives (Ke et al., 2017; Pedregosa et al., 2011).
 
-### Workflow Update (Current)
-
-The implementation now follows three aligned scripts:
-
-- `src/lgbm_fixed.py`: fixed-parameter production variant (no HPO), with radiomics filtering, 5-fold CV reporting, and LGBM-only inference.
-- `src/lgbm.py`: always-on Bayesian HPO workflow with K-fold diagnostics and OOF-driven class-scale tuning.
-- `src/stat3612.ipynb`: notebook version of the same workflow, including local `bayes_optimize` and local `build_submission` for Kaggle portability.
-
-Key updates versus older drafts:
-
-- **Radiomics pipeline**:
-  - modality-wise radiomics merge;
-  - ANOVA filtering (`p <= 0.05`);
-  - sparse-column dropping by missing-rate threshold;
-  - missingness indicator features for retained radiomics columns.
-- **Validation diagnostics**:
-  - 5-fold stratified CV score monitoring on train+val.
-- **Decision layer**:
-  - class-scale tuning on probabilities;
-  - OOF-driven class-scale tuning is used by default in `lgbm.py`.
-- **Submission path**:
-  - final `lgbm.py` submission is produced by training one final model on `train+val` with HPO-selected params, then applying OOF-tuned scales at inference.
-
-Recent observed run snapshot (fixed-parameter reference, `lgbm_fixed.py`):
-
-- Validation Accuracy: `0.8798586572438163`
-- Validation Micro F1: `0.8798586572438163`
-- Validation Macro F1: `0.807533609097973`
-- Validation Weighted F1: `0.8776004438803224`
-- Best blended score (val-tuned scales): `0.847743174261604`
-- Best blended score after threshold tuning: `0.8220003917228115`
-- Best class scales:
-  - Brain Metastase Tumour: `1.0`
-  - Pineal tumour and Choroid plexus tumour: `3.0`
-  - Tumors of the sellar region: `1.9`
-- Generated predictions: `378`
-- Submission path: `/kaggle/working/submission.csv`
-- Kaggle Public score: `0.7432`
-- Overall running time: `1038.50 seconds`
-
-This indicates the current LGBM pipeline with radiomics filtering and scale tuning remains competitive and stable for repeated experimentation.
-
-This section explains why the pipeline works, how each design choice maps to the code in `src/lgbm.py` and `src/lgbm_fixed.py`, and why this approach ultimately outperforms our earlier BPNN direction from the project plan.
-
-Note: all `python` code blocks in this document are intentionally trimmed for readability. For full implementations, see `src/lgbm.py`, `src/lgbm_fixed.py`, and `src/stat3612.ipynb`.
-
 ### Documentation Navigation
 
 - TF-IDF vectorizer reference: <https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfVectorizer.html>
@@ -94,6 +48,28 @@ $$
 so a model that performs extremely well on common classes but misses rare classes is still suboptimal.
 
 This is why the pipeline does not optimize plain accuracy alone. Instead, it uses a custom blended objective that incorporates weighted-$F_1$, macro-$F_1$, and minority recall directly.
+
+#### Radiomics ANOVA Screening
+
+Before model fitting, the pipeline applies a univariate ANOVA filter to radiomics columns. Let $x_j$ denote radiomics feature $j$ and $y$ denote the class label. For each feature, we compute an ANOVA $F$-statistic:
+
+$$
+F_j = \frac{\text{between-class variance of } x_j}{\text{within-class variance of } x_j},
+$$
+
+then convert it to a $p$-value and retain the feature when:
+
+$$
+p_j \le 0.05.
+$$
+
+In implementation terms (`select_radiomics_by_anova` in `src/lgbm.py`), this screening step:
+
+- removes weak radiomics features before high-dimensional sparse fusion;
+- reduces noise and collinearity pressure for downstream LightGBM splits;
+- keeps the remaining feature set clinically interpretable at the modality-feature level.
+
+After ANOVA, the pipeline also applies missingness-based filtering and optional missingness indicators to stabilize retained radiomics signals across splits.
 
 ### 2. TF-IDF Vectorization
 
@@ -443,6 +419,14 @@ The latest reported validation snapshot below comes from the fixed-parameter ref
 | Weighted-$F_1$ | 0.8776004438803224 |
 | Blended score (val-tuned scales) | 0.847743174261604 |
 | Blended score after threshold tuning | 0.8220003917228115 |
+
+Radiomics ANOVA summary for this run:
+
+| Item | Value |
+|---|---:|
+| Candidate radiomics features | 20 |
+| Retained after ANOVA ($p \le 0.05$) | 14 |
+| Retention ratio | 70.0% |
 
 Class-wise validation summary:
 
