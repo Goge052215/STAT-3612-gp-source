@@ -8,7 +8,7 @@ The task is a five-class classification problem from the Kaggle competition, usi
 
 - Kaggle competition link [here](https://www.kaggle.com/competitions/2026-spring-sdst-stat-3612-group-project/overview)
 - Dataset download link [here](https://www.kaggle.com/competitions/2026-spring-sdst-stat-3612-group-project/data)
-- **Final Report (PDF) link [here](https://github.com/Goge052215/Brain-Tumor-Classifier-Light/blob/main/report.pdf)**
+- **Final Report (PDF) link [here](https://github.com/Goge052215/Brain-Tumor-Classifier-Light/blob/main/docs/report.pdf)**
 
 ## Project Overview
 
