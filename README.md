@@ -37,7 +37,7 @@ The main workflow in `src/lgbm.py` is:
 9. Tune class scales on validation probabilities, then re-tune scales with OOF probabilities on `train + val` (default behavior).
 10. Retrain one final model on balanced `train + val` and generate final test predictions for Kaggle submission.
 
-For a more **technical** explanation of the workflow, please refer to the [writeups.md](https://github.com/Goge052215/Brain-Tumor-Classifier-Light/blob/main/docs/writeups.md). Alternatively, check out our [Final Report (PDF)](https://github.com/Goge052215/Brain-Tumor-Classifier-Light/blob/main/report.pdf).
+For a more **technical** explanation of the workflow, please refer to the [writeups.md](https://github.com/Goge052215/Brain-Tumor-Classifier-Light/blob/main/docs/writeups.md). Alternatively, check out our [Final Report (PDF)](https://github.com/Goge052215/Brain-Tumor-Classifier-Light/blob/main/docs/report.pdf).
 
 ## Repo Layout
 
